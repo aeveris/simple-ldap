@@ -73,7 +73,7 @@ impl LdapPool {
             .unwrap()
             .success()
             .map_err(|e| {
-                Error::Connection("Could create LDAP connection from the pool".into(), e)
+                Error::Connection("Unable to create LDAP connection from the pool".into(), e)
             })?;
 
         Ok(LdapClient::from(ldap))

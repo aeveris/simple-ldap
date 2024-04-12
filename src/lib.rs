@@ -180,22 +180,13 @@ impl LdapClient {
         let search = self
             .ldap
             .search(base, scope, filter.filter().as_str(), attributes)
-            .await;
-        if let Err(error) = search {
-            return Err(Error::Query(
-                format!("Error searching for record: {:?}", error),
-                error,
-            ));
-        }
-        let result = search.unwrap().success();
-        if let Err(error) = result {
-            return Err(Error::Query(
-                format!("Error searching for record: {:?}", error),
-                error,
-            ));
-        }
+            .await
+            .map_err(|e| Error::Query(format!("Error searching for record: {:?}", e), e))?;
+        let result = search
+            .success()
+            .map_err(|e| Error::Query(format!("Error searching for record: {:?}", e), e))?;
 
-        let records = result.unwrap().0;
+        let records = result.0;
 
         if records.len() > 1 {
             return Err(Error::MultipleResults(String::from(
@@ -266,7 +257,7 @@ impl LdapClient {
     ) -> Result<T, Error> {
         let search_entry = self.search_inner(base, scope, filter, attributes).await?;
 
-        let json = LdapClient::create_json_signle_value(search_entry)?;
+        let json = LdapClient::create_json_single_value(search_entry)?;
         LdapClient::map_to_struct(json)
     }
 
@@ -337,7 +328,7 @@ impl LdapClient {
         }
     }
 
-    fn create_json_signle_value(search_entry: SearchEntry) -> Result<String, Error> {
+    fn create_json_single_value(search_entry: SearchEntry) -> Result<String, Error> {
         let result: HashMap<&str, Option<&String>> = search_entry
             .attrs
             .iter()
@@ -380,38 +371,26 @@ impl LdapClient {
         limit: i32,
         attributes: &Vec<&str>,
     ) -> Result<Vec<SearchEntry>, Error> {
-        let search_stream = self
+        let mut search_stream = self
             .ldap
             .streaming_search(base, scope, filter.filter().as_str(), attributes)
-            .await;
-        if let Err(error) = search_stream {
-            return Err(Error::Query(
-                format!("Error searching for record: {:?}", error),
-                error,
-            ));
-        }
-        let mut search_stream = search_stream.unwrap();
+            .await
+            .map_err(|e| Error::Query(format!("Error searching for record: {:?}", e), e))?;
 
         let mut entries = Vec::new();
         let mut count = 0;
 
-        loop {
-            let next = search_stream.next().await;
-            if next.is_err() {
-                break;
-            }
-
+        while let Ok(entry) = search_stream.next().await {
             if search_stream.state() != StreamState::Active {
                 break;
             }
 
-            let entry = next.unwrap();
-            if entry.is_none() {
-                break;
-            }
-            if let Some(entry) = entry {
-                entries.push(SearchEntry::construct(entry));
-                count += 1;
+            match entry {
+                Some(e) => {
+                    entries.push(SearchEntry::construct(e));
+                    count += 1;
+                }
+                None => break,
             }
 
             if count == limit {
@@ -421,7 +400,10 @@ impl LdapClient {
 
         let _res = search_stream.finish().await;
         let msgid = search_stream.ldap_handle().last_id();
-        self.ldap.abandon(msgid).await.unwrap();
+        self.ldap
+            .abandon(msgid)
+            .await
+            .expect("Could not abandon operation");
 
         Ok(entries)
     }
@@ -485,7 +467,7 @@ impl LdapClient {
 
         let jsons = entries
             .iter()
-            .map(|entry| LdapClient::create_json_signle_value(entry.to_owned()).unwrap())
+            .map(|entry| LdapClient::create_json_single_value(entry.to_owned()).unwrap())
             .collect::<Vec<String>>();
 
         let data = jsons
@@ -609,22 +591,15 @@ impl LdapClient {
         data: Vec<(&str, HashSet<&str>)>,
     ) -> Result<(), Error> {
         let dn = format!("uid={},{}", uid, base);
-        let save = self.ldap.add(dn.as_str(), data).await;
-        if let Err(err) = save {
-            return Err(Error::Create(
-                format!("Error saving record: {:?}", err),
-                err,
-            ));
-        }
-        let save = save.unwrap().success();
+        let save = self
+            .ldap
+            .add(dn.as_str(), data)
+            .await
+            .map_err(|e| Error::Create(format!("Error saving record: {:?}", e), e))?;
+        let res = save
+            .success()
+            .map_err(|e| Error::Create(format!("Error saving record: {:?}", e), e))?;
 
-        if let Err(err) = save {
-            return Err(Error::Create(
-                format!("Error saving record: {:?}", err),
-                err,
-            ));
-        }
-        let res = save.unwrap();
         debug!("Sucessfully created record result: {:?}", res);
         Ok(())
     }
@@ -674,33 +649,18 @@ impl LdapClient {
     ) -> Result<(), Error> {
         let dn = format!("uid={},{}", uid, base);
 
-        let res = self.ldap.modify(dn.as_str(), data).await;
-        if let Err(err) = res {
-            return Err(Error::Update(
-                format!("Error updating record: {:?}", err),
-                err,
-            ));
-        }
+        let res = self
+            .ldap
+            .modify(dn.as_str(), data)
+            .await
+            .map_err(|e| Error::Update(format!("Error updating record: {:?}", e), e))?;
 
-        let res = res.unwrap().success();
-        if let Err(err) = res {
-            match err {
-                LdapError::LdapResult { result } => {
-                    if result.rc == NO_SUCH_RECORD {
-                        return Err(Error::NotFound(format!(
-                            "No records found for the uid: {:?}",
-                            uid
-                        )));
-                    }
-                }
-                _ => {
-                    return Err(Error::Update(
-                        format!("Error updating record: {:?}", err),
-                        err,
-                    ));
-                }
+        res.success().map_err(|err| match err {
+            LdapError::LdapResult { result } if result.rc == NO_SUCH_RECORD => {
+                Error::NotFound(format!("No records found for the uid: {:?}", uid))
             }
-        }
+            _ => Error::Update(format!("Error updating record: {:?}", err), err),
+        })?;
 
         if new_uid.is_none() {
             return Ok(());
@@ -712,25 +672,17 @@ impl LdapClient {
             let dn_update = self
                 .ldap
                 .modifydn(dn.as_str(), new_dn.as_str(), true, None)
-                .await;
-            if let Err(err) = dn_update {
-                error!("Failed to update dn for record {:?} error {:?}", uid, err);
-                return Err(Error::Update(
-                    format!("Failed to update dn for record {:?}", uid),
-                    err,
-                ));
-            }
+                .await
+                .map_err(|e| {
+                    error!("Failed to update dn for record {:?} error {:?}", uid, e);
+                    Error::Update(format!("Failed to update dn for record {:?}", uid), e)
+                })?;
 
-            let dn_update = dn_update.unwrap().success();
-            if let Err(err) = dn_update {
-                error!("Failed to update dn for record {:?} error {:?}", uid, err);
-                return Err(Error::Update(
-                    format!("Failed to update dn for record {:?}", uid),
-                    err,
-                ));
-            }
+            let res = dn_update.success().map_err(|e| {
+                error!("Failed to update dn for record {:?} error {:?}", uid, e);
+                Error::Update(format!("Failed to update dn for record {:?}", uid), e)
+            })?;
 
-            let res = dn_update.unwrap();
             debug!("Sucessfully updated dn result: {:?}", res);
         }
 
@@ -768,33 +720,18 @@ impl LdapClient {
     /// ```
     pub async fn delete(&mut self, uid: &str, base: &str) -> Result<(), Error> {
         let dn = format!("uid={},{}", uid, base);
-        let delete = self.ldap.delete(dn.as_str()).await;
+        let delete = self
+            .ldap
+            .delete(dn.as_str())
+            .await
+            .map_err(|e| Error::Delete(format!("Error deleting record: {:?}", e), e))?;
 
-        if let Err(err) = delete {
-            return Err(Error::Delete(
-                format!("Error deleting record: {:?}", err),
-                err,
-            ));
-        }
-        let delete = delete.unwrap().success();
-        if let Err(err) = delete {
-            match err {
-                LdapError::LdapResult { result } => {
-                    if result.rc == NO_SUCH_RECORD {
-                        return Err(Error::NotFound(format!(
-                            "No records found for the uid: {:?}",
-                            uid
-                        )));
-                    }
-                }
-                _ => {
-                    return Err(Error::Delete(
-                        format!("Error deleting record: {:?}", err),
-                        err,
-                    ));
-                }
+        delete.success().map_err(|err| match err {
+            LdapError::LdapResult { result } if result.rc == NO_SUCH_RECORD => {
+                Error::NotFound(format!("No records found for the uid: {:?}", uid))
             }
-        }
+            _ => Error::Delete(format!("Error deleting record: {:?}", err), err),
+        })?;
         debug!("Sucessfully deleted record result: {:?}", uid);
         Ok(())
     }
@@ -843,22 +780,15 @@ impl LdapClient {
             ("ou", HashSet::from([group_ou])),
             ("description", HashSet::from([description])),
         ];
-        let save = self.ldap.add(dn.as_str(), data).await;
-        if let Err(err) = save {
-            return Err(Error::Create(
-                format!("Error saving record: {:?}", err),
-                err,
-            ));
-        }
-        let save = save.unwrap().success();
+        let save = self
+            .ldap
+            .add(dn.as_str(), data)
+            .await
+            .map_err(|e| Error::Create(format!("Error saving record: {:?}", e), e))?;
+        let res = save
+            .success()
+            .map_err(|err| Error::Create(format!("Error creating group: {:?}", err), err))?;
 
-        if let Err(err) = save {
-            return Err(Error::Create(
-                format!("Error creating group: {:?}", err),
-                err,
-            ));
-        }
-        let res = save.unwrap();
         debug!("Sucessfully created group result: {:?}", res);
         Ok(())
     }
@@ -901,34 +831,20 @@ impl LdapClient {
         let mut mods = Vec::new();
         let users = users.iter().copied().collect::<HashSet<&str>>();
         mods.push(Mod::Replace("member", users));
-        let res = self.ldap.modify(group_dn, mods).await;
-        if let Err(err) = res {
-            return Err(Error::Update(
-                format!("Error updating record: {:?}", err),
-                err,
-            ));
-        }
+        let res = self
+            .ldap
+            .modify(group_dn, mods)
+            .await
+            .map_err(|e| Error::Update(format!("Error updating record: {:?}", e), e))?;
 
-        let res = res.unwrap().success();
-        if let Err(err) = res {
-            match err {
-                LdapError::LdapResult { result } => {
-                    if result.rc == NO_SUCH_RECORD {
-                        return Err(Error::NotFound(format!(
-                            "No records found for the uid: {:?}",
-                            group_dn
-                        )));
-                    }
+        res.success()
+            .map_err(|err| match err {
+                LdapError::LdapResult { result } if result.rc == NO_SUCH_RECORD => {
+                    Error::NotFound(format!("No records found for the uid: {:?}", group_dn))
                 }
-                _ => {
-                    return Err(Error::Update(
-                        format!("Error updating record: {:?}", err),
-                        err,
-                    ));
-                }
-            }
-        }
-        Ok(())
+                _ => Error::Update(format!("Error updating record: {:?}", err), err),
+            })
+            .and(Ok(()))
     }
 
     ///
@@ -986,23 +902,14 @@ impl LdapClient {
                 "(objectClass=groupOfNames)",
                 vec!["member"],
             )
-            .await;
+            .await
+            .map_err(|e| Error::Query(format!("Error searching for record: {:?}", e), e))?;
 
-        if let Err(error) = search {
-            return Err(Error::Query(
-                format!("Error searching for record: {:?}", error),
-                error,
-            ));
-        }
-        let result = search.unwrap().success();
-        if let Err(error) = result {
-            return Err(Error::Query(
-                format!("Error searching for record: {:?}", error),
-                error,
-            ));
-        }
+        let result = search
+            .success()
+            .map_err(|e| Error::Query(format!("Error searching for record: {:?}", e), e))?;
 
-        let records = result.unwrap().0;
+        let records = result.0;
 
         if records.len() > 1 {
             return Err(Error::MultipleResults(String::from(
@@ -1085,34 +992,24 @@ impl LdapClient {
         let mut mods = Vec::new();
         let users = users.iter().copied().collect::<HashSet<&str>>();
         mods.push(Mod::Delete("member", users));
-        let res = self.ldap.modify(group_dn, mods).await;
-        if let Err(err) = res {
-            return Err(Error::Update(
-                format!("Error removing users from group:{:?}: {:?}", group_dn, err),
-                err,
-            ));
-        }
+        let res = self.ldap.modify(group_dn, mods).await.map_err(|e| {
+            Error::Update(
+                format!("Error removing users from group:{:?}: {:?}", group_dn, e),
+                e,
+            )
+        })?;
 
-        let res = res.unwrap().success();
-        if let Err(err) = res {
-            match err {
-                LdapError::LdapResult { result } => {
-                    if result.rc == NO_SUCH_RECORD {
-                        return Err(Error::NotFound(format!(
-                            "No records found for the uid: {:?}",
-                            group_dn
-                        )));
-                    }
+        res.success()
+            .map_err(|err| match err {
+                LdapError::LdapResult { result } if result.rc == NO_SUCH_RECORD => {
+                    Error::NotFound(format!("No records found for the uid: {:?}", group_dn))
                 }
-                _ => {
-                    return Err(Error::Update(
-                        format!("Error removing users from group:{:?}: {:?}", group_dn, err),
-                        err,
-                    ));
-                }
-            }
-        }
-        Ok(())
+                _ => Error::Update(
+                    format!("Error removing users from group:{:?}: {:?}", group_dn, err),
+                    err,
+                ),
+            })
+            .and(Ok(()))
     }
 
     ///
@@ -1145,7 +1042,7 @@ impl LdapClient {
     ///     "uid=bd9b91ec-7a69-4166-bf67-cc7e553b2fd9,ou=people,dc=example,dc=com").await;
     /// }
     /// ```
-    pub async fn get_associtated_groups(
+    pub async fn get_associated_groups(
         &mut self,
         group_ou: &str,
         user_dn: &str,
@@ -1168,23 +1065,14 @@ impl LdapClient {
                 filter.filter().as_str(),
                 vec!["cn"],
             )
-            .await;
+            .await
+            .map_err(|e| Error::Query(format!("Error searching for record: {:?}", e), e))?;
 
-        if let Err(error) = search {
-            return Err(Error::Query(
-                format!("Error searching for record: {:?}", error),
-                error,
-            ));
-        }
-        let result = search.unwrap().success();
-        if let Err(error) = result {
-            return Err(Error::Query(
-                format!("Error searching for record: {:?}", error),
-                error,
-            ));
-        }
+        let result = search
+            .success()
+            .map_err(|e| Error::Query(format!("Error searching for record: {:?}", e), e))?;
 
-        let records = result.unwrap().0;
+        let records = result.0;
 
         if records.is_empty() {
             return Err(Error::NotFound(String::from(
@@ -1192,7 +1080,7 @@ impl LdapClient {
             )));
         }
 
-        let record = records
+        let groups = records
             .iter()
             .map(|record| SearchEntry::construct(record.to_owned()))
             .map(|se| se.attrs)
@@ -1205,7 +1093,7 @@ impl LdapClient {
             })
             .collect::<Vec<String>>();
 
-        Ok(record)
+        Ok(groups)
     }
 }
 
@@ -1281,7 +1169,7 @@ mod tests {
             bin_attrs: HashMap::new(),
         };
 
-        let json = LdapClient::create_json_signle_value(entry).unwrap();
+        let json = LdapClient::create_json_single_value(entry).unwrap();
         let test = LdapClient::map_to_struct::<TestSingleValued>(json);
         assert!(test.is_ok());
         let test = test.unwrap();
@@ -1327,6 +1215,7 @@ mod tests {
         let result = pool
             .get_connection()
             .await
+            .unwrap()
             .create(
                 "bd9b91ec-7a69-4166-bf67-cc7e553b2fd9",
                 "ou=people,dc=example,dc=com",
@@ -1346,7 +1235,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
         let name_filter = EqFilter::from("cn".to_string(), "Sam".to_string());
         let user = ldap
             .search::<User>(
@@ -1372,7 +1261,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
         let name_filter = EqFilter::from("cn".to_string(), "SamX".to_string());
         let user = ldap
             .search::<User>(
@@ -1400,7 +1289,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
         let name_filter = EqFilter::from("cn".to_string(), "James".to_string());
         let user = ldap
             .search::<User>(
@@ -1428,7 +1317,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
         let data = vec![
             Mod::Replace("cn", HashSet::from(["Jhon_Update"])),
             Mod::Replace("sn", HashSet::from(["Eliet_Update"])),
@@ -1454,7 +1343,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
         let data = vec![
             Mod::Replace("cn", HashSet::from(["Jhon_Update"])),
             Mod::Replace("sn", HashSet::from(["Eliet_Update"])),
@@ -1485,7 +1374,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
         let data = vec![
             Mod::Replace("cn", HashSet::from(["David_Update"])),
             Mod::Replace("sn", HashSet::from(["Hanks_Update"])),
@@ -1501,7 +1390,7 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
         let name_filter = EqFilter::from(
             "uid".to_string(),
             "6da70e51-7897-411f-9290-649ebfcb3269".to_string(),
@@ -1530,7 +1419,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
 
         let name_filter = EqFilter::from("cn".to_string(), "James".to_string());
         let result = ldap
@@ -1557,7 +1446,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
 
         let name_filter = EqFilter::from("cn".to_string(), "JamesX".to_string());
         let result = ldap
@@ -1584,7 +1473,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
 
         let result = ldap
             .delete(
@@ -1605,7 +1494,7 @@ mod tests {
         };
 
         let pool = pool::build_connection_pool(&ldap_config).await;
-        let mut ldap = pool.get_connection().await;
+        let mut ldap = pool.get_connection().await.unwrap();
 
         let result = ldap
             .delete(
@@ -1635,6 +1524,7 @@ mod tests {
         let result = pool
             .get_connection()
             .await
+            .unwrap()
             .create_group("test_group", "dc=example,dc=com", "Some Description")
             .await;
 
@@ -1655,12 +1545,14 @@ mod tests {
         let _result = pool
             .get_connection()
             .await
+            .unwrap()
             .create_group("test_group_1", "dc=example,dc=com", "Some Decription")
             .await;
 
         let result = pool
             .get_connection()
             .await
+            .unwrap()
             .add_users_to_group(
                 vec![
                     "uid=f92f4cb2-e821-44a4-bb13-b8ebadf4ecc5,ou=people,dc=example,dc=com",
@@ -1688,12 +1580,14 @@ mod tests {
         let _result = pool
             .get_connection()
             .await
+            .unwrap()
             .create_group("test_group_3", "dc=example,dc=com", "Some Decription 2")
             .await;
 
         let _result = pool
             .get_connection()
             .await
+            .unwrap()
             .add_users_to_group(
                 vec![
                     "uid=f92f4cb2-e821-44a4-bb13-b8ebadf4ecc5,ou=people,dc=example,dc=com",
@@ -1706,6 +1600,7 @@ mod tests {
         let result = pool
             .get_connection()
             .await
+            .unwrap()
             .get_members::<User>(
                 "cn=test_group_3,dc=example,dc=com",
                 "dc=example,dc=com",
@@ -1741,12 +1636,14 @@ mod tests {
         let _result = pool
             .get_connection()
             .await
+            .unwrap()
             .create_group("test_group_2", "dc=example,dc=com", "Some Decription 2")
             .await;
 
         let _result = pool
             .get_connection()
             .await
+            .unwrap()
             .add_users_to_group(
                 vec![
                     "uid=f92f4cb2-e821-44a4-bb13-b8ebadf4ecc5,ou=people,dc=example,dc=com",
@@ -1759,6 +1656,7 @@ mod tests {
         let result = pool
             .get_connection()
             .await
+            .unwrap()
             .remove_users_from_group(
                 "cn=test_group_2,dc=example,dc=com",
                 vec![
@@ -1784,7 +1682,8 @@ mod tests {
         let result = pool
             .get_connection()
             .await
-            .get_associtated_groups(
+            .unwrap()
+            .get_associated_groups(
                 "ou=group,dc=example,dc=com",
                 "uid=e219fbc0-6df5-4bc3-a6ee-986843bb157e,ou=people,dc=example,dc=com",
             )
