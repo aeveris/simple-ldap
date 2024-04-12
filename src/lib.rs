@@ -128,8 +128,10 @@ impl LdapClient {
                 LDAP_ENTRY_DN,
             )
             .await
-            .unwrap();
-        let (data, _rs) = rs.success().unwrap();
+            .map_err(|e| Error::Query("Unable to search for user for authentication".into(), e))?;
+        let (data, _rs) = rs.success().map_err(|e| {
+            Error::NotFound(format!("Could not find user for authentication ({e})"))
+        })?;
         if data.is_empty() {
             return Err(Error::NotFound(format!("No record found {:?}", uid)));
         }
@@ -152,26 +154,23 @@ impl LdapClient {
 
         let entry_dn = result.get("entryDN").unwrap();
 
-        let result = self.ldap.simple_bind(entry_dn, password).await;
-        if result.is_err() {
-            return Err(Error::AuthenticationFailed(format!(
-                "Error authenticating user: {:?}",
-                uid
-            )));
-        }
+        let result = self
+            .ldap
+            .simple_bind(entry_dn, password)
+            .await
+            .map_err(|_| {
+                Error::AuthenticationFailed(format!("Error authenticating user: {:?}", uid))
+            })?;
 
-        let result = result.unwrap().success();
-        if result.is_err() {
-            return Err(Error::AuthenticationFailed(format!(
-                "Error authenticating user: {:?}",
-                uid
-            )));
-        }
-
-        Ok(())
+        result
+            .success()
+            .map_err(|_| {
+                Error::AuthenticationFailed(format!("Error authenticating user: {:?}", uid))
+            })
+            .and(Ok(()))
     }
 
-    async fn search_innter(
+    async fn search_inner(
         &mut self,
         base: &str,
         scope: Scope,
@@ -265,7 +264,7 @@ impl LdapClient {
         filter: &impl Filter,
         attributes: &Vec<&str>,
     ) -> Result<T, Error> {
-        let search_entry = self.search_innter(base, scope, filter, attributes).await?;
+        let search_entry = self.search_inner(base, scope, filter, attributes).await?;
 
         let json = LdapClient::create_json_signle_value(search_entry)?;
         LdapClient::map_to_struct(json)
@@ -321,7 +320,7 @@ impl LdapClient {
         filter: &impl Filter,
         attributes: &Vec<&str>,
     ) -> Result<T, Error> {
-        let search_entry = self.search_innter(base, scope, filter, attributes).await?;
+        let search_entry = self.search_inner(base, scope, filter, attributes).await?;
         let json = LdapClient::create_json_multi_value(search_entry)?;
 
         LdapClient::map_to_struct(json)
@@ -1155,7 +1154,7 @@ impl LdapClient {
             "objectClass".to_string(),
             "groupOfNames".to_string(),
         ));
-        
+
         let user_filter = Box::new(EqFilter::from("member".to_string(), user_dn.to_string()));
         let mut filter = AndFilter::default();
         filter.add(group_filter);
@@ -1163,7 +1162,12 @@ impl LdapClient {
 
         let search = self
             .ldap
-            .search(group_ou, Scope::Subtree, filter.filter().as_str(), vec!["cn"])
+            .search(
+                group_ou,
+                Scope::Subtree,
+                filter.filter().as_str(),
+                vec!["cn"],
+            )
             .await;
 
         if let Err(error) = search {
@@ -1188,11 +1192,19 @@ impl LdapClient {
             )));
         }
 
-        let record = records.iter()
-            .map(|record| SearchEntry::construct(record.to_owned())).map(|se| se.attrs)
-            .flat_map(|att| att.get("cn").unwrap().iter().map(|x| x.to_owned()).collect::<Vec<String>>())
+        let record = records
+            .iter()
+            .map(|record| SearchEntry::construct(record.to_owned()))
+            .map(|se| se.attrs)
+            .flat_map(|att| {
+                att.get("cn")
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.to_owned())
+                    .collect::<Vec<String>>()
+            })
             .collect::<Vec<String>>();
-        
+
         Ok(record)
     }
 }
@@ -1219,6 +1231,8 @@ pub enum Error {
     Delete(String, LdapError),
     /// Error occured when mapping the search result to a struct
     Mapping(String),
+    /// Error occurred when creating a LDAP connection
+    Connection(String, LdapError),
 }
 
 #[cfg(test)]
@@ -1777,7 +1791,7 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(),2);
+        assert_eq!(result.unwrap().len(), 2);
     }
 
     #[derive(Deserialize)]
