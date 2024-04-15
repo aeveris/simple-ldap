@@ -46,7 +46,7 @@ pub mod filter;
 pub mod pool;
 pub extern crate ldap3;
 
-const LDAP_ENTRY_DN: [&str; 3] = ["entryDN", "DN", "distinguishedName"];
+const LDAP_ENTRY_DN: [&str; 2] = ["entryDN", "distinguishedName"];
 const NO_SUCH_RECORD: u32 = 32;
 ///
 /// High-level LDAP client wrapper ontop of ldap3 crate. This wrapper provides a high-level interface to perform LDAP operations
@@ -155,7 +155,6 @@ impl LdapClient {
 
         let entry_dn = result
             .get("entryDN")
-            .or(result.get("DN"))
             .or(result.get("distinguishedName"))
             .ok_or(Error::AuthenticationFailed(format!(
                 "Could not get DN of user {uid}"
@@ -1043,9 +1042,9 @@ impl LdapClient {
     ///     };
     ///
     ///     let pool = pool::build_connection_pool(&ldap_config).await;
-    ///     let mut ldap = pool.get_connection().await;
+    ///     let mut ldap = pool.get_connection().await.unwrap();
     ///
-    ///     let result = ldap.get_associtated_groups("ou=groups,dc=example,dc=com",
+    ///     let result = ldap.get_associated_groups("ou=groups,dc=example,dc=com",
     ///     "uid=bd9b91ec-7a69-4166-bf67-cc7e553b2fd9,ou=people,dc=example,dc=com").await;
     /// }
     /// ```
