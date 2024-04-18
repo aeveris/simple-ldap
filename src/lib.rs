@@ -1052,10 +1052,13 @@ impl LdapClient {
         &mut self,
         group_ou: &str,
         user_dn: &str,
+        grp_class: Option<impl Into<String>>,
     ) -> Result<Vec<String>, Error> {
         let group_filter = Box::new(EqFilter::from(
             "objectClass".to_string(),
-            "groupOfNames".to_string(),
+            grp_class
+                .map(Into::into)
+                .unwrap_or_else(|| "groupOfNames".to_owned()),
         ));
 
         let user_filter = Box::new(EqFilter::from("member".to_string(), user_dn.to_string()));
