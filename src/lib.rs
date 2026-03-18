@@ -1,6 +1,6 @@
 //! # simple-ldap
 //!
-//! This is a high-level LDAP client library created by wrapping the rust LDAP3 clinet.
+//! This is a high-level LDAP client library created by wrapping the rust LDAP3 client.
 //! This provides high-level functions that helps to interact with LDAP.
 //!
 //!
@@ -142,7 +142,7 @@ use serde::{Deserialize, Serialize};
 use serde_value::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fmt, iter, num::{NonZeroU16, NonZeroU32},
+    fmt, iter, num::NonZeroU16,
 };
 use thiserror::Error;
 use tracing::{Level, debug, error, info, instrument, warn};
@@ -252,11 +252,11 @@ impl LdapClient {
     /// including open streams. So make sure that you're really good to close.
     ///
     /// Closing an LDAP connection with an unbind is *a curtesy.*
-    /// It's fine to skip it, and because of the async hurdless outlined above,
+    /// It's fine to skip it, and because of the async hurdles outlined above,
     /// I would perhaps even recommend it.
     // Consuming self to prevent accidental use after unbind.
     // This also conveniently prevents calling this with pooled clients, as the
-    // wrapper `Object` prohibiths moving.
+    // wrapper `Object` prohibits moving.
     pub async fn unbind(mut self) -> Result<(), Error> {
         match self.ldap.unbind().await {
             Ok(_) => Ok(()),
@@ -491,7 +491,8 @@ impl LdapClient {
     ///
     /// Search a single value from the LDAP server. The search is performed using the provided filter.
     /// The filter should be a filter that matches a single record. if the filter matches multiple users, an error is returned.
-    /// This operatrion is useful when records has multi-valued attributes.
+    /// This operation is useful when records has multi-valued attributes.
+    ///
     ///
     /// # Arguments
     ///
@@ -781,7 +782,7 @@ impl LdapClient {
             return Err(Error::Create(format!("Error saving record: {err:?}"), err));
         }
         let res = save.unwrap();
-        debug!("Sucessfully created record result: {:?}", res);
+        debug!("Successfully created record result: {:?}", res);
         Ok(())
     }
 
@@ -902,7 +903,7 @@ impl LdapClient {
             }
 
             let res = dn_update.unwrap();
-            debug!("Sucessfully updated dn result: {:?}", res);
+            debug!("Successfully updated dn result: {:?}", res);
         }
 
         Ok(())
@@ -971,7 +972,7 @@ impl LdapClient {
                 }
             }
         }
-        debug!("Sucessfully deleted record result: {:?}", uid);
+        debug!("Successfully deleted record result: {:?}", uid);
         Ok(())
     }
 
@@ -1034,7 +1035,7 @@ impl LdapClient {
             return Err(Error::Create(format!("Error creating group: {err:?}"), err));
         }
         let res = save.unwrap();
-        debug!("Sucessfully created group result: {:?}", res);
+        debug!("Successfully created group result: {:?}", res);
         Ok(())
     }
 
@@ -1667,7 +1668,7 @@ where
     async fn cleanup(&mut self) -> () {
         // Calling this might not be strictly necessary,
         // but it's probably expected so let's just do it.
-        // I don't think this does any networkig most of the time.
+        // I don't think this does any networking most of the time.
         let finish_result = self.search_stream.finish().await;
 
         match finish_result.success() {
@@ -1757,7 +1758,7 @@ impl Record {
     /// Create a new Record object with single valued attributes.
     /// This is essentially parsing the response records into usable types.
     //
-    // This is kind of missnomer, as we aren't creating records here.
+    // This is kind of misnomer, as we aren't creating records here.
     // Perhaps something like "deserialize" would fit better?
     pub fn to_record<T: for<'b> serde::Deserialize<'b>>(self) -> Result<T, Error> {
         to_value(self.search_entry)
