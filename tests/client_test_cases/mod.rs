@@ -41,7 +41,7 @@
 use anyhow::anyhow;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
-use rand::Rng;
+use rand::RngExt;
 use serde::Deserialize;
 use std::{collections::HashSet, num::{NonZero, NonZeroU16}, ops::DerefMut, str::FromStr, sync::Once};
 use tracing::Level;
