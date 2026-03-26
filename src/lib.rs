@@ -3,6 +3,8 @@
 //! This is a high-level LDAP client library created by wrapping the rust LDAP3 client.
 //! This provides high-level functions that helps to interact with LDAP.
 //!
+//! Wondering what this "LDAP" is anyway? Check this excellent [primer](https://github.com/inejge/ldap3/blob/27a247c8a6e4e2c86f664f4280c4c6499f0e9fe5/LDAP-primer.md) in the `ldap3` crate.
+//!
 //!
 //! ## Features
 //!
