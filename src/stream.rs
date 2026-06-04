@@ -1,8 +1,9 @@
 //! Native rust streams for streaming searches
 //!
 
-use futures::{Stream, executor::block_on};
+use futures::Stream;
 use ldap3::{LdapError, LdapResult, SearchEntry, SearchStream, StreamState};
+use tokio::{runtime::Handle, task::block_in_place};
 use tracing::{Level, error, info, instrument};
 
 use crate::{Error, Record};
@@ -24,13 +25,7 @@ where
     S: AsRef<str> + Send + Sync + 'a,
     A: AsRef<[S]> + Send + Sync + 'a,
 {
-    /// ⚠️ Deadlock risk
-    ///
-    /// Sporadic async deadlocks have been encountered here.
-    /// Some version of [Futurelock](https://rfd.shared.oxide.computer/rfd/0609),
-    /// I believe it's due to ldap3 storing stream adaptors inside tokio mutexes
-    /// in combination with some future structures.
-    ///
+
     /// Anyway nowadays we do most cleanup in the stream end, so this does nothing.
     /// The risk still exists if the stream is dropped mid way though.
     fn drop(&mut self) {
@@ -41,7 +36,18 @@ where
                 // Making this blocking call in drop is suboptimal.
                 // We should use async-drop, when it's stabilized:
                 // https://github.com/rust-lang/rust/issues/126482
-                match block_on(self.cleanup()) {
+                //
+                // Previously we used `futures::block_on()` but that ran the risk of deadlocks
+                // (not entirely clear why). The client object is already guaranteed to be in a tokio runtime,
+                // and so the lifetime `'a` also guarantees that we are now in a tokio managed thread.
+                // Thus we can run some async code with block_in_place().
+                // This does necessitate that we're in a multithread executor though.
+                let result = block_in_place(|| {
+                    Handle::current().block_on(async move {
+                        self.cleanup().await
+                    })
+                });
+                match result {
                     Ok(()) => (),
                     Err(ldap_err) => {
                         // Cannot return the error from drop but at least we can log it.
@@ -100,6 +106,7 @@ where
 }
 
 /// Just a DRY helper for calling `finish()` on the stream.
+#[instrument(level = Level::TRACE, skip_all, ret)]
 async fn finish_stream<'a, S, A>(stream: &mut SearchStream<'a, S, A>) -> Result<(), LdapError>
 where
     S: AsRef<str> + Send + Sync + 'a,

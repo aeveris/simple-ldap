@@ -20,8 +20,11 @@
 //! Adding `simple_ldap` as a dependency to your project:
 //!
 //! ```commandline
+//! cargo add tokio --features rt-multi-thread
 //! cargo add simple-ldap
 //! ```
+//!
+//! Multithreaded executor is required.
 //!
 //! Most functionalities are defined on the [`LdapClient`] type. Have a look at the docs.
 //!

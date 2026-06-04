@@ -6,7 +6,7 @@ readme = "README.md"
 repository = "https://github.com/keaz/simple-ldap"
 keywords = ["ldap", "ldap3", "async", "high-level"]
 name = "simple-ldap"
-version = "9.0.0"
+version = "10.0.0"
 edition = "2024"
 
 
@@ -25,6 +25,9 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde-value = "0.7.0"
 serde_with = "3.12.0"
 thiserror = "2.0.12"
+# ldap3 is already depending on tokio so we aren't adding much.
+# Multithread is needed for the blocking calls in stream destructor.
+tokio = { version = "1.44.2", features = ["rt-multi-thread"] }
 tracing = "0.1.41"
 url = "2.5.4"
 

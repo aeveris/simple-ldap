@@ -51,7 +51,7 @@ struct User {
 }
 
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main(){
     let ldap_config = LdapConfig {
         bind_dn: String::from("cn=manager"),
