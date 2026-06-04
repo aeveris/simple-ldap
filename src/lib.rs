@@ -595,7 +595,6 @@ impl LdapClient {
     /// We're waiting for [`AsyncDrop`](https://github.com/rust-lang/rust/issues/126482) for implementing this properly.
     ///
     ///
-    ///
     /// # Example
     ///
     /// ```no_run
@@ -1522,7 +1521,7 @@ fn to_signle_value<T: for<'a> Deserialize<'a>>(search_entry: SearchEntry) -> Res
         .map_err(|err| Error::Mapping(format!("Error converting search result to object, {err:?}")))
 }
 
-#[instrument(level = Level::DEBUG)]
+#[instrument(level = Level::TRACE)]
 fn to_value<T: for<'a> Deserialize<'a>>(search_entry: SearchEntry) -> Result<T, Error> {
     let string_attributes = search_entry
         .attrs

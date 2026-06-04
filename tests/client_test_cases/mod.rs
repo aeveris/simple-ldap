@@ -484,7 +484,7 @@ pub async fn test_search_stream_drop<Client: DerefMut<Target = LdapClient>>(
     mut client: Client,
 ) -> anyhow::Result<()> {
     // Here we always want to trace.
-    // enable_tracing_subscriber();
+    enable_tracing_subscriber();
 
     let name_filter = ContainsFilter::from("cn".to_string(), "J".to_string());
     let attributes = vec!["cn", "sn", "uid"];
