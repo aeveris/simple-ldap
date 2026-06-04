@@ -134,10 +134,9 @@
 //! * `pool` - Enable connection pooling
 //!
 
-use futures::{Stream, StreamExt, executor::block_on, stream};
+use futures::{Stream, StreamExt};
 use ldap3::{
-    Ldap, LdapConnAsync, LdapConnSettings, LdapError, LdapResult, Mod, Scope, SearchEntry,
-    SearchStream, StreamState,
+    Ldap, LdapConnAsync, LdapConnSettings, LdapError, Mod, Scope, SearchEntry,
     adapters::{Adapter, EntriesOnly, PagedResults},
 };
 use serde::{Deserialize, Serialize};
@@ -147,7 +146,7 @@ use std::{
     fmt, iter, num::NonZeroU16,
 };
 use thiserror::Error;
-use tracing::{Level, debug, error, info, instrument, warn};
+use tracing::{Level, debug, error, instrument, warn};
 use url::Url;
 
 use filter::{AndFilter, EqFilter, Filter, OrFilter};
@@ -158,10 +157,13 @@ pub mod filter;
 pub mod pool;
 pub mod simple_dn;
 mod sort;
+mod stream;
 // Export the main type of the module right here in the root.
 pub use simple_dn::SimpleDN;
 // Used as an argument in the public API.
 pub use sort::adapter::SortBy;
+
+use crate::stream::to_native_stream;
 
 // Would likely be better if we could avoid re-exporting this.
 // I suspect it's only used in some configs?
@@ -1625,126 +1627,6 @@ fn map_to_single_value_bin(attra_values: Option<Vec<u8>>) -> serde_value::Value 
     }
 }
 
-/// This wrapper exists solely for the purpose of runnig some cleanup in `drop()`.
-///
-/// This should be refactored to implement `AsyncDrop` when it gets stabilized:
-/// https://github.com/rust-lang/rust/issues/126482
-struct StreamDropWrapper<'a, S, A>
-where
-    S: AsRef<str> + Send + Sync + 'a,
-    A: AsRef<[S]> + Send + Sync + 'a,
-{
-    pub search_stream: SearchStream<'a, S, A>,
-}
-
-impl<'a, S, A> Drop for StreamDropWrapper<'a, S, A>
-where
-    S: AsRef<str> + Send + Sync + 'a,
-    A: AsRef<[S]> + Send + Sync + 'a,
-{
-    fn drop(&mut self) {
-        // Making this blocking call in drop is suboptimal.
-        // We should use async-drop, when it's stabilized:
-        // https://github.com/rust-lang/rust/issues/126482
-        block_on(self.cleanup());
-    }
-}
-
-impl<'a, S, A> StreamDropWrapper<'a, S, A>
-where
-    S: AsRef<str> + Send + Sync + 'a,
-    A: AsRef<[S]> + Send + Sync + 'a,
-{
-    ///
-    /// Cleanup the stream. This method should be called when dropping the stream.
-    ///
-    /// This method will cleanup the stream and close the connection.
-    ///
-    ///
-    /// # Errors
-    ///
-    /// No errors are returned, as this is meant to be called from `drop()`.
-    /// Traces are emitted though.
-    ///
-    #[instrument(level = Level::TRACE, skip_all)]
-    async fn cleanup(&mut self) -> () {
-        // Calling this might not be strictly necessary,
-        // but it's probably expected so let's just do it.
-        // I don't think this does any networking most of the time.
-        let finish_result = self.search_stream.finish().await;
-
-        match finish_result.success() {
-            Ok(_) => (), // All good.
-            // This is returned if the stream is cancelled in the middle.
-            // Which is fine for us.
-            // https://ldap.com/ldap-result-code-reference-client-side-result-codes/#rc-userCanceled
-            Err(LdapError::LdapResult {
-                result: LdapResult { rc: 88, .. },
-            }) => (),
-            Err(finish_err) => error!("The stream finished with an error: {finish_err}"),
-        }
-
-        match self.search_stream.state() {
-            // Stream processed to the end, no need to cancel the operation.
-            // This should be the common case.
-            StreamState::Done | StreamState::Closed => (),
-            StreamState::Error => {
-                error!(
-                    "Stream is in Error state. Not trying to cancel it as it could do more harm than good."
-                );
-            }
-            StreamState::Fresh | StreamState::Active => {
-                info!("Stream is still open. Issuing cancellation to the server.");
-                let msgid = self.search_stream.ldap_handle().last_id();
-                let result = self.search_stream.ldap_handle().abandon(msgid).await;
-
-                match result {
-                    Ok(_) => (),
-                    Err(err) => {
-                        error!("Error abandoning search result: {:?}", err);
-                        ()
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// A helper to create native rust streams out of `ldap3::SearchStream`s.
-fn to_native_stream<'a, S, A>(
-    ldap3_stream: SearchStream<'a, S, A>,
-) -> Result<impl Stream<Item = Result<Record, Error>> + 'a + use<'a, S, A>, Error>
-where
-    S: AsRef<str> + Send + Sync + 'a,
-    A: AsRef<[S]> + Send + Sync + 'a,
-{
-    // This will handle stream cleanup.
-    let stream_wrapper = StreamDropWrapper {
-        search_stream: ldap3_stream,
-    };
-
-    // Produce the steam itself by unfolding.
-    let stream = stream::try_unfold(stream_wrapper, async |mut search| {
-        match search.search_stream.next().await {
-            // In the middle of the stream. Produce the next result.
-            Ok(Some(result_entry)) => Ok(Some((
-                Record {
-                    search_entry: SearchEntry::construct(result_entry),
-                },
-                search,
-            ))),
-            // Stream is done.
-            Ok(None) => Ok(None),
-            Err(ldap_error) => Err(Error::Query(
-                format!("Error getting next record: {ldap_error:?}"),
-                ldap_error,
-            )),
-        }
-    });
-
-    Ok(stream)
-}
-
 /// The Record struct is used to map the search result to a struct.
 /// The Record struct has a method to_record which will map the search result to a struct.
 /// The Record struct has a method to_multi_valued_record which will map the search result to a struct with multi valued attributes.
@@ -2004,7 +1886,7 @@ mod tests {
     }
     /// Get the binary and hyphenated string representations of an UUID for testing.
     fn get_binary_uuid() -> (Vec<u8>, String) {
-        // Exaple grabbed from uuid docs:
+        // Example grabbed from uuid docs:
         // https://docs.rs/uuid/latest/uuid/struct.Uuid.html#method.from_bytes
         let bytes = vec![
             0xa1, 0xa2, 0xa3, 0xa4, 0xb1, 0xb2, 0xc1, 0xc2, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6,
