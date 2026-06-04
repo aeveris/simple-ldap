@@ -4,7 +4,7 @@
 use futures::Stream;
 use ldap3::{LdapError, LdapResult, SearchEntry, SearchStream, StreamState};
 use tokio::{runtime::Handle, task::block_in_place};
-use tracing::{Level, error, info, instrument};
+use tracing::{Level, error, info, instrument, warn};
 
 use crate::{Error, Record};
 
@@ -42,6 +42,7 @@ where
                 // and so the lifetime `'a` also guarantees that we are now in a tokio managed thread.
                 // Thus we can run some async code with block_in_place().
                 // This does necessitate that we're in a multithread executor though.
+                warn!("Dropping a stream mid way. Performing blocking cleanup in drop().");
                 let result = block_in_place(|| {
                     Handle::current().block_on(async move {
                         self.cleanup().await
