@@ -4,7 +4,7 @@
 use futures::Stream;
 use ldap3::{LdapError, LdapResult, SearchEntry, SearchStream, StreamState};
 use tokio::{runtime::Handle, task::block_in_place};
-use tracing::{Level, error, info, instrument, warn};
+use tracing::{Level, debug, error, instrument, warn};
 
 use crate::{Error, Record};
 
@@ -28,6 +28,8 @@ where
 
     /// Anyway nowadays we do most cleanup in the stream end, so this does nothing.
     /// The risk still exists if the stream is dropped mid way though.
+    ///
+    /// In this case there might exist a possibility of a futurelock too.
     fn drop(&mut self) {
         match self.search_stream.state() {
             // Avoiding the block if this stream has already been cleaned up.
@@ -92,7 +94,7 @@ where
                 Ok(())
             }
             StreamState::Fresh | StreamState::Active => {
-                info!("Stream is still open. Issuing cancellation to the server.");
+                debug!("Stream is still open. Issuing cancellation to the server.");
 
                 // Let's first call finish according to the docs.
                 // This probably wont do too much but it gives the adapters a chance for some cleanup.
@@ -160,7 +162,13 @@ where
                 // The alternative is to block on this in `drop()`.
                 // That still has to be called because streams may be dropped mid way too,
                 // but running them to completion is assumed to be the common case.
-                let cleanup_result = search.cleanup().await;
+                //
+                // Actually we cannot call `self.cleanup()` here because that will send
+                // unnecessary search abandon if the stream had no adaptors:
+                // https://github.com/inejge/ldap3/issues/155
+                //
+                // Just finishing is okay though.
+                let cleanup_result = finish_stream(&mut search.search_stream).await;
 
                 // Doing the cleanup here (as opposed to drop) also has the advantage that we can
                 // return the potential error.

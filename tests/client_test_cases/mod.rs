@@ -820,7 +820,7 @@ fn random_uid() -> String {
         .to_owned()
 }
 
-/// Get ldap configuration for conneting to the test server.
+/// Get ldap configuration for connecting to the test server.
 pub fn ldap_config() -> anyhow::Result<LdapConfig> {
     let config = LdapConfig {
         bind_dn: String::from("cn=manager"),
