@@ -25,7 +25,6 @@ where
     S: AsRef<str> + Send + Sync + 'a,
     A: AsRef<[S]> + Send + Sync + 'a,
 {
-
     /// Anyway nowadays we do most cleanup in the stream end, so this does nothing.
     /// The risk still exists if the stream is dropped mid way though.
     ///
@@ -46,9 +45,7 @@ where
                 // This does necessitate that we're in a multithread executor though.
                 warn!("Dropping a stream mid way. Performing blocking cleanup in drop().");
                 let result = block_in_place(|| {
-                    Handle::current().block_on(async move {
-                        self.cleanup().await
-                    })
+                    Handle::current().block_on(async move { self.cleanup().await })
                 });
                 match result {
                     Ok(()) => (),
@@ -174,11 +171,12 @@ where
                 // return the potential error.
                 match cleanup_result {
                     Ok(()) => Ok(None),
-                    Err(ldap_err) => {
-                        Err(Error::Query(String::from("Error finishing the streaming search"), ldap_err))
-                    }
+                    Err(ldap_err) => Err(Error::Query(
+                        String::from("Error finishing the streaming search"),
+                        ldap_err,
+                    )),
                 }
-            },
+            }
             Err(ldap_error) => Err(Error::Query(
                 format!("Error getting next record: {ldap_error:?}"),
                 ldap_error,

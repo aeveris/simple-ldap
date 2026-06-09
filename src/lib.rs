@@ -146,7 +146,8 @@ use serde::{Deserialize, Serialize};
 use serde_value::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fmt, iter, num::NonZeroU16,
+    fmt, iter,
+    num::NonZeroU16,
 };
 use thiserror::Error;
 use tracing::{Level, debug, error, instrument, warn};
@@ -688,10 +689,11 @@ impl LdapClient {
         // Define the needed adapters.
 
         // Entries only is only needed with paging.
-        let (paging_adapter, entries_only_adapter) = page_size.map(|non_zero|
-                (PagedResults::new(non_zero.get().into()), EntriesOnly::new())
-            )
-            .map(|(page_adapter, entries_adapter)| (Box::new(page_adapter) as _, Box::new(entries_adapter) as _))
+        let (paging_adapter, entries_only_adapter) = page_size
+            .map(|non_zero| (PagedResults::new(non_zero.get().into()), EntriesOnly::new()))
+            .map(|(page_adapter, entries_adapter)| {
+                (Box::new(page_adapter) as _, Box::new(entries_adapter) as _)
+            })
             .unzip();
 
         // Empty vec just means that we won't use the search adapter.
