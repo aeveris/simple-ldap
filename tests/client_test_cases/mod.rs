@@ -43,7 +43,13 @@ use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use rand::RngExt;
 use serde::Deserialize;
-use std::{collections::HashSet, num::{NonZero, NonZeroU16}, ops::DerefMut, str::FromStr, sync::Once};
+use std::{
+    collections::HashSet,
+    num::{NonZero, NonZeroU16},
+    ops::DerefMut,
+    str::FromStr,
+    sync::Once,
+};
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use url::Url;
@@ -86,7 +92,10 @@ pub struct User {
 
 #[derive(Deserialize)]
 pub struct MultiValueUser {
-    #[expect(dead_code, reason = "Having this here will still test the deserialization.")]
+    #[expect(
+        dead_code,
+        reason = "Having this here will still test the deserialization."
+    )]
     pub dn: SimpleDN,
     #[serde(rename = "objectClass")]
     pub object_class: Vec<String>,
@@ -299,7 +308,7 @@ pub async fn streaming_search<Client: DerefMut<Target = LdapClient>>(
             &name_filter,
             &attra,
             None,
-            Vec::new()
+            Vec::new(),
         )
         .await?;
 
@@ -484,7 +493,7 @@ pub async fn test_search_stream_drop<Client: DerefMut<Target = LdapClient>>(
     mut client: Client,
 ) -> anyhow::Result<()> {
     // Here we always want to trace.
-    // enable_tracing_subscriber();
+    enable_tracing_subscriber();
 
     let name_filter = ContainsFilter::from("cn".to_string(), "J".to_string());
     let attributes = vec!["cn", "sn", "uid"];
@@ -525,7 +534,7 @@ pub async fn test_streaming_search_no_records<Client: DerefMut<Target = LdapClie
             &name_filter,
             &attributes,
             None,
-            Vec::new()
+            Vec::new(),
         )
         .await?;
 
@@ -820,7 +829,7 @@ fn random_uid() -> String {
         .to_owned()
 }
 
-/// Get ldap configuration for conneting to the test server.
+/// Get ldap configuration for connecting to the test server.
 pub fn ldap_config() -> anyhow::Result<LdapConfig> {
     let config = LdapConfig {
         bind_dn: String::from("cn=manager"),
